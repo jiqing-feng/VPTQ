@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import torch
 from pathlib import Path
 
 from packaging.version import Version, parse
@@ -283,6 +284,17 @@ description = (
     "for Large Language Models"
 )
 
+ext_modules = []
+cmdclass = {}
+if torch.cuda.is_available():
+    ext_modules=[CMakeExtension("vptq")]
+    cmdclass={
+        "build_ext": CMakeBuildExt,
+        "clean": Clean,
+        "develop": Develop,
+        "tests": PyTest,
+    }
+
 setup(
     name="vptq",
     python_requires=">=3.8",
@@ -290,13 +302,8 @@ setup(
     version=get_version(),
     description=description,
     author="Wang Yang, Wen JiCheng, Cao Ying",
-    ext_modules=[CMakeExtension("vptq")],
-    cmdclass={
-        "build_ext": CMakeBuildExt,
-        "clean": Clean,
-        "develop": Develop,
-        "tests": PyTest,
-    },
+    ext_modules=ext_modules,
+    cmdclass=cmdclass,
     package_data={
         "vptq": ["**/*.py"],
     },
