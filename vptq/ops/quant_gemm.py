@@ -40,6 +40,92 @@ except Exception as error:
     )
 
 
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def unpack_bits_kernel(
+    packed_ptr,
+    out_ptr,
+    N: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    if pid >= N:
+        return
+
+    val = tl.load(packed_ptr + pid).to(tl.uint32)
+    shifts = tl.arange(0, 32).to(tl.uint32)
+    bits = (val >> shifts) & 1
+    out_offset = pid * 32 + tl.arange(0, 32)
+    tl.store(out_ptr + out_offset, bits)
+
+@triton.jit
+def bitwise_sum_mask_kernel(
+    out_ptr,
+    indices_ptr,
+    res_indices_ptr,
+    index_bits,
+    num_rows: tl.constexpr,
+    num_cols: tl.constexpr,
+):
+    row_idx = tl.program_id(0)
+    col_idx = tl.arange(0, num_cols)
+    out_vals = tl.load(out_ptr + row_idx * num_cols + col_idx)
+    shifted_vals = out_vals << col_idx
+    sum_val = tl.sum(shifted_vals, axis=0)
+    sum_val_int64 = tl.cast(sum_val, tl.int64)
+
+    mask = (1 << index_bits) - 1
+    indices_val = sum_val_int64 & mask
+    res_indices_val = (sum_val_int64 >> index_bits) & mask
+    tl.store(indices_ptr + row_idx, indices_val)
+    tl.store(res_indices_ptr + row_idx, res_indices_val)
+
+def unpack_index_tensor_triton(
+    packed_tensor: torch.Tensor,
+    index_bits: int,
+    num_elements: int,
+    res_bits: int = 0,
+    num_res_elements: int = 0,
+):
+    assert packed_tensor.dtype == torch.int32
+    packed_tensor = packed_tensor.contiguous()
+    N = packed_tensor.numel()
+    total_bits = index_bits + res_bits
+    out = torch.empty((*packed_tensor.shape, 32), dtype=torch.int32, device=packed_tensor.device)
+    unpack_bits_kernel[(N,)](
+        packed_tensor,
+        out.view(-1),
+        N=N,
+        num_warps=4
+    )
+    pad_size = (packed_tensor.shape[-1] * 32) % (
+        index_bits * num_elements + res_bits * num_res_elements
+    )
+    out = out.reshape(*packed_tensor.shape[:-1], -1)
+    if pad_size > 0:
+        out = out[..., :-pad_size]
+    out = out.reshape(*packed_tensor.shape[:-1], -1, total_bits)
+    num_rows = out.shape[0] * out.shape[1] * out.shape[2]
+    num_cols = out.shape[3]
+    indices = torch.empty((num_rows,), dtype=torch.int64, device=out.device)
+    res_indices = torch.empty((num_rows,), dtype=torch.int64, device=out.device)
+    grid = (num_rows,)
+    bitwise_sum_mask_kernel[grid](
+        out.view(-1, num_cols),
+        indices,
+        res_indices,
+        index_bits,
+        num_rows,
+        num_cols,
+    )
+    # Reshape the result back to the original shape
+    indices = indices.view(out.shape[:-1]).view(torch.uint64).to(torch.int64)
+    res_indices = res_indices.view(out.shape[:-1]).view(torch.uint64).to(torch.int64) if res_bits > 0 else None
+    return indices, res_indices
+
+
 def dequant(
     indices: torch.Tensor,
     centroids: torch.Tensor,
@@ -77,7 +163,7 @@ def dequant(
         if enable_residual:
             index_res_bits = math.ceil(math.log2(num_res_centroids))
 
-        indices, res_indices = unpack_index_tensor(
+        indices, res_indices = unpack_index_tensor_triton(
             packed_tensor=indices,
             index_bits=index_bits,
             num_elements=group_size,
