@@ -70,8 +70,9 @@ def bitwise_sum_mask_kernel(
     num_cols: tl.constexpr,
 ):
     row_idx = tl.program_id(0)
-    col_idx = tl.arange(0, num_cols)
-    out_vals = tl.load(out_ptr + row_idx * num_cols + col_idx)
+    col_idx = tl.arange(0, 32)
+    mask = col_idx < num_cols
+    out_vals = tl.load(out_ptr + row_idx * num_cols + col_idx, mask=mask)
     shifted_vals = out_vals << col_idx
     sum_val = tl.sum(shifted_vals, axis=0)
     sum_val_int64 = tl.cast(sum_val, tl.int64)
