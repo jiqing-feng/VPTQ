@@ -176,10 +176,14 @@ def dequant(
         if enable_residual:
             res_indices = res_indices.view(torch.uint16).to(torch.int64)
 
-    selected_centroids = centroids.index_select(1, indices.reshape(-1))
+    indices = indices.unsqueeze(-1).expand(-1, -1, -1, vector_len)
+    indices = indices.reshape(num_codebooks, -1, vector_len)
+
+    selected_centroids = torch.gather(centroids, 1, indices)
     selected_centroids = selected_centroids.view(
         num_codebooks, -1, group_size, vector_len
     )
+
     selected_centroids = selected_centroids.permute(0, 1, 3, 2)
     qweight = selected_centroids.reshape(num_codebooks, -1, group_size)
     qweight = qweight.permute(1, 0, 2)
@@ -189,7 +193,10 @@ def dequant(
         res_centroids = res_centroids.view(
             num_codebooks, num_res_centroids, vector_len
         )
-        selected_res_centroids = res_centroids.index_select(1, res_indices.reshape(-1))
+        res_indices = res_indices.unsqueeze(-1).expand(-1, -1, -1, vector_len)
+        res_indices = res_indices.reshape(num_codebooks, -1, vector_len)
+
+        selected_res_centroids = torch.gather(res_centroids, 1, res_indices)
         res_centroids = selected_res_centroids.reshape(
             num_codebooks, -1, group_size, vector_len
         )
@@ -207,8 +214,17 @@ def dequant(
         outlier_centroids = outlier_centroids.view(
             1, num_outlier_centroids, outlier_vector_len
         )
+
         outlier_indices = outlier_indices.view(torch.uint16).to(torch.int64)
-        selected_outlier_centroids = outlier_centroids.index_select(1, outlier_indices.reshape(-1))
+        outlier_indices = outlier_indices.unsqueeze(-1).expand(
+            -1, -1, -1, outlier_vector_len
+        )
+
+        outlier_indices = outlier_indices.reshape(1, -1, outlier_vector_len)
+        selected_outlier_centroids = torch.gather(
+            outlier_centroids, 1, outlier_indices
+        )
+
         outlier_centroids = selected_outlier_centroids.reshape(
             1, -1, outlier_size, outlier_vector_len
         )
