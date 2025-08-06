@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import torch
 from pathlib import Path
 
 from packaging.version import Version, parse
@@ -17,6 +16,14 @@ from setuptools.command.develop import develop
 from torch.utils.cpp_extension import CUDA_HOME
 
 cur_path = Path(__file__).parent
+
+
+def has_cuda():
+    try:
+        subprocess.check_output(['nvidia-smi'], stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
 
 
 def get_version():
@@ -286,7 +293,7 @@ description = (
 
 ext_modules = []
 cmdclass = {}
-if torch.cuda.is_available():
+if has_cuda():
     ext_modules=[CMakeExtension("vptq")]
     cmdclass={
         "build_ext": CMakeBuildExt,
